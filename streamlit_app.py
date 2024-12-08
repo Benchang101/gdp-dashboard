@@ -1,151 +1,64 @@
-import streamlit as st
-import pandas as pd
-import math
-from pathlib import Path
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# 更換為高階模型名稱，例如 OpenAI 的 `GPT-4` 替代模型，或 Hugging Face 提供的高性能模型名稱
+model_name = "gpt-neo-2.7B"  # 你可以改成 "gpt-j-6B" 或其他模型名稱
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name)
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# 設定對話歷史
+conversation_history = []
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+# 設定對話參數
+max_history = 3  # 儲存更長的對話歷史（取決於模型的能力）
+max_new_tokens = 100  # 更高階模型可以生成更長的內容
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+def chat_with_ai(user_input):
+    global conversation_history
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+    # 添加使用者輸入到對話歷史
+    conversation_history.append(f"User: {user_input}")
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+    # 保留最近幾輪對話
+    conversation_history = conversation_history[-max_history:]
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
+    # 構建輸入
+    input_text = "\n".join(conversation_history) + "\nAI:"
+    inputs = tokenizer(input_text, return_tensors="pt")
+
+    # 生成 AI 回應
+    outputs = model.generate(
+        inputs.input_ids,
+        attention_mask=inputs.attention_mask,
+        max_new_tokens=max_new_tokens,
+        pad_token_id=tokenizer.eos_token_id,
+        repetition_penalty=1.5,
+        no_repeat_ngram_size=3,
+        temperature=0.7,
+        top_k=50,
+        top_p=0.9,
+        do_sample=True,
     )
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+    # 解碼生成的回應
+    response = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
-    return gdp_df
+    # 提取 AI 的回答部分
+    if "AI:" in response:
+        response = response.split("AI:")[-1].strip()
 
-gdp_df = get_gdp_data()
+    # 添加 AI 回應到對話歷史
+    conversation_history.append(f"AI: {response}")
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+    return response
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+# 主程式執行模擬器
+print("ChatGPT 模擬器已啟動！輸入 'quit' 退出。")
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+while True:
+    user_input = input("你: ")
+    if user_input.lower() == "quit":
+        print("退出 ChatGPT 模擬器。")
+        break
 
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+    ai_response = chat_with_ai(user_input)
+    print(f"AI: {ai_response}")

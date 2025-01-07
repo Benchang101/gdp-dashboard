@@ -1,4 +1,4 @@
-%pip install transformers acceleration
+%pip install transformers accelerate
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # 更換為高階模型名稱，例如 OpenAI 的 `GPT-4` 替代模型，或 Hugging Face 提供的高性能模型名稱
